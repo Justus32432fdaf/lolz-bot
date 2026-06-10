@@ -45,11 +45,31 @@ class TelegramNotifier:
         logger.info("Alert sent for item %s", item_id)
 
     async def send_startup_message(self, session: aiohttp.ClientSession, seen_count: int) -> None:
-        text = (
+        await self._send_message(
+            session,
             "<b>LZT Scanner gestartet</b>\n\n"
             "Filter: EU Region, hat Messer\n"
-            f"Bekannte Listings: {seen_count}"
+            f"Bekannte Listings: {seen_count}\n\n"
+            "Sende /status fuer eine Statusabfrage.",
         )
+
+    async def send_status_message(
+        self,
+        session: aiohttp.ClientSession,
+        seen_count: int,
+        last_poll_ok: bool,
+    ) -> None:
+        status = "OK" if last_poll_ok else "Fehler beim letzten Poll"
+        await self._send_message(
+            session,
+            "<b>LZT Scanner Status</b>\n\n"
+            f"API: <b>{status}</b>\n"
+            f"Bekannte Listings: <b>{seen_count}</b>\n"
+            "Filter: EU, Messer\n\n"
+            "Der Bot antwortet nur auf /status und /start.",
+        )
+
+    async def _send_message(self, session: aiohttp.ClientSession, text: str) -> None:
         payload = {
             "chat_id": self.chat_id,
             "text": text,
@@ -58,7 +78,8 @@ class TelegramNotifier:
         async with session.post(f"{self._base_url}/sendMessage", json=payload) as resp:
             if resp.status != 200:
                 body = await resp.text()
-                logger.warning("Startup message failed (%s): %s", resp.status, body)
+                logger.error("Telegram send failed (%s): %s", resp.status, body)
+                resp.raise_for_status()
 
 
 def _extract_region(item: dict) -> str:

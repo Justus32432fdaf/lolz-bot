@@ -20,10 +20,17 @@ SEARCH_PARAMS = {
 
 
 class LZTScanner:
-    def __init__(self, config: Config, storage: ItemStorage, notifier: TelegramNotifier) -> None:
+    def __init__(
+        self,
+        config: Config,
+        storage: ItemStorage,
+        notifier: TelegramNotifier,
+        command_handler: "TelegramCommandHandler | None" = None,
+    ) -> None:
         self.config = config
         self.storage = storage
         self.notifier = notifier
+        self.command_handler = command_handler
         self._backoff = config.poll_interval
         self._first_run = storage.count() == 0
 
@@ -41,8 +48,12 @@ class LZTScanner:
                 started = time.monotonic()
                 try:
                     await self._poll_once(session)
+                    if self.command_handler:
+                        self.command_handler.set_last_poll_ok(True)
                     self._backoff = self.config.poll_interval
                 except aiohttp.ClientResponseError as exc:
+                    if self.command_handler:
+                        self.command_handler.set_last_poll_ok(False)
                     if exc.status == 429:
                         retry_after = float(exc.headers.get("Retry-After", self._backoff * 2))
                         self._backoff = min(max(retry_after, self.config.poll_interval), 60)
@@ -51,9 +62,13 @@ class LZTScanner:
                         logger.error("API error %s: %s", exc.status, exc.message)
                         self._backoff = min(self._backoff * 2, 60)
                 except aiohttp.ClientError as exc:
+                    if self.command_handler:
+                        self.command_handler.set_last_poll_ok(False)
                     logger.error("Network error: %s", exc)
                     self._backoff = min(self._backoff * 2, 60)
                 except Exception:
+                    if self.command_handler:
+                        self.command_handler.set_last_poll_ok(False)
                     logger.exception("Unexpected error during poll")
                     self._backoff = min(self._backoff * 2, 60)
 
@@ -69,10 +84,16 @@ class LZTScanner:
             resp.raise_for_status()
             data = await resp.json()
 
+        if data.get("errors"):
+            logger.error("LZT API returned errors: %s", data["errors"])
+            return
+
         items = _extract_items(data)
         if not items:
-            logger.debug("No items in response")
+            logger.warning("Poll OK but 0 listings parsed (totalItems=%s)", data.get("totalItems"))
             return
+
+        logger.info("Poll OK: %d listings on page 1 (tracking %d known)", len(items), self.storage.count())
 
         now = time.time()
 
@@ -107,6 +128,26 @@ class LZTScanner:
 
 def _extract_items(data: dict[str, Any]) -> list[dict[str, Any]]:
     items = data.get("items")
-    if isinstance(items, list):
-        return [i for i in items if isinstance(i, dict)]
-    return []
+    if not isinstance(items, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for entry in items:
+        item = _normalize_listing(entry)
+        if item is not None:
+            normalized.append(item)
+    return normalized
+
+
+def _normalize_listing(entry: Any) -> dict[str, Any] | None:
+    if not isinstance(entry, dict):
+        return None
+
+    if entry.get("item_id"):
+        return entry
+
+    nested = entry.get("item")
+    if isinstance(nested, dict) and nested.get("item_id"):
+        return nested
+
+    return None

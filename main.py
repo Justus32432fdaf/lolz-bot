@@ -7,6 +7,7 @@ from config import Config
 from notifier import TelegramNotifier
 from scanner import LZTScanner
 from storage import ItemStorage
+from telegram_commands import TelegramCommandHandler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,7 +21,13 @@ async def main() -> None:
     config = Config.from_env()
     storage = ItemStorage(config.db_path)
     notifier = TelegramNotifier(config.telegram_bot_token, config.telegram_chat_id)
-    scanner = LZTScanner(config, storage, notifier)
+    command_handler = TelegramCommandHandler(
+        config.telegram_bot_token,
+        config.telegram_chat_id,
+        notifier,
+        storage,
+    )
+    scanner = LZTScanner(config, storage, notifier, command_handler)
 
     logger.info("Starting LZT scanner (poll interval: %.1fs)", config.poll_interval)
     logger.info("Database: %s (%d known items)", config.db_path, storage.count())
@@ -39,11 +46,12 @@ async def main() -> None:
             # Windows does not support add_signal_handler for all signals.
             pass
 
-    scan_task = asyncio.create_task(scanner.run())
-    stop_task = asyncio.create_task(stop_event.wait())
+    scan_task = asyncio.create_task(scanner.run(), name="scanner")
+    commands_task = asyncio.create_task(command_handler.run(), name="telegram-commands")
+    stop_task = asyncio.create_task(stop_event.wait(), name="shutdown")
 
     done, pending = await asyncio.wait(
-        {scan_task, stop_task},
+        {scan_task, commands_task, stop_task},
         return_when=asyncio.FIRST_COMPLETED,
     )
 
