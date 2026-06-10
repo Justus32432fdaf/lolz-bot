@@ -58,15 +58,19 @@ class TelegramNotifier:
         session: aiohttp.ClientSession,
         seen_count: int,
         last_poll_ok: bool,
+        last_error: str = "",
     ) -> None:
-        status = "OK" if last_poll_ok else "Fehler beim letzten Poll"
+        status = "OK" if last_poll_ok else "Fehler"
+        detail = _escape_html(last_error) if last_error and not last_poll_ok else ""
+        detail_block = f"\nDetails: <code>{detail}</code>\n" if detail else "\n"
         await self._send_message(
             session,
             "<b>LZT Scanner Status</b>\n\n"
-            f"API: <b>{status}</b>\n"
+            f"API: <b>{status}</b>"
+            f"{detail_block}\n"
             f"Bekannte Listings: <b>{seen_count}</b>\n"
             "Filter: EU, Messer\n\n"
-            "Der Bot antwortet nur auf /status und /start.",
+            "Sende /status fuer eine neue Abfrage.",
         )
 
     async def _send_message(self, session: aiohttp.ClientSession, text: str) -> None:

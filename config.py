@@ -32,7 +32,7 @@ class Config:
             lzt_api_token=lzt_token,
             telegram_bot_token=tg_token,
             telegram_chat_id=tg_chat,
-            poll_interval=float(os.environ.get("POLL_INTERVAL", "3")),
+            poll_interval=float(os.environ.get("POLL_INTERVAL", "6")),
             db_path=os.environ.get("DB_PATH", "data/scanner.db"),
             api_base_url=os.environ.get("LZT_API_BASE_URL", "https://prod-api.lzt.market"),
         )

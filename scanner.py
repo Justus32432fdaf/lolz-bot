@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 from typing import Any
@@ -11,12 +12,18 @@ from storage import ItemStorage
 
 logger = logging.getLogger(__name__)
 
-SEARCH_PARAMS = {
-    "knife": "true",
-    "valorant_region[]": "EU",
-    "order_by": "pdate_to_down",
-    "page": "1",
-}
+SEARCH_PARAMS = [
+    ("knife", "true"),
+    ("valorant_region[]", "EU"),
+    ("order_by", "pdate_to_down"),
+    ("page", "1"),
+]
+
+
+class PollError(Exception):
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
 
 
 class LZTScanner:
@@ -39,6 +46,7 @@ class LZTScanner:
         headers = {
             "Authorization": f"Bearer {self.config.lzt_api_token}",
             "Accept": "application/json",
+            "User-Agent": "lolz-bot/1.0",
         }
 
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
@@ -49,26 +57,39 @@ class LZTScanner:
                 try:
                     await self._poll_once(session)
                     if self.command_handler:
-                        self.command_handler.set_last_poll_ok(True)
+                        self.command_handler.set_poll_result(True, "OK")
                     self._backoff = self.config.poll_interval
-                except aiohttp.ClientResponseError as exc:
+                except PollError as exc:
                     if self.command_handler:
-                        self.command_handler.set_last_poll_ok(False)
+                        self.command_handler.set_poll_result(False, exc.message)
+                    logger.error("Poll failed: %s", exc.message)
+                    self._backoff = min(self._backoff * 2, 60)
+                except aiohttp.ClientResponseError as exc:
+                    body = getattr(exc, "message", str(exc))
+                    error = f"HTTP {exc.status}: {body}"
+                    if self.command_handler:
+                        is_rate_limit = exc.status == 429
+                        self.command_handler.set_poll_result(
+                            is_rate_limit,
+                            "Rate limit (429) - warte..." if is_rate_limit else error,
+                        )
                     if exc.status == 429:
                         retry_after = float(exc.headers.get("Retry-After", self._backoff * 2))
                         self._backoff = min(max(retry_after, self.config.poll_interval), 60)
                         logger.warning("Rate limited (429), backing off to %.1fs", self._backoff)
                     else:
-                        logger.error("API error %s: %s", exc.status, exc.message)
+                        logger.error("API error: %s", error)
                         self._backoff = min(self._backoff * 2, 60)
                 except aiohttp.ClientError as exc:
+                    error = f"Netzwerkfehler: {exc}"
                     if self.command_handler:
-                        self.command_handler.set_last_poll_ok(False)
-                    logger.error("Network error: %s", exc)
+                        self.command_handler.set_poll_result(False, error)
+                    logger.error(error)
                     self._backoff = min(self._backoff * 2, 60)
-                except Exception:
+                except Exception as exc:
+                    error = f"Unerwarteter Fehler: {exc}"
                     if self.command_handler:
-                        self.command_handler.set_last_poll_ok(False)
+                        self.command_handler.set_poll_result(False, error)
                     logger.exception("Unexpected error during poll")
                     self._backoff = min(self._backoff * 2, 60)
 
@@ -79,18 +100,24 @@ class LZTScanner:
     async def _poll_once(self, session: aiohttp.ClientSession) -> None:
         url = f"{self.config.api_base_url}/riot"
         async with session.get(url, params=SEARCH_PARAMS) as resp:
-            if resp.status == 429:
-                resp.raise_for_status()
-            resp.raise_for_status()
-            data = await resp.json()
+            body = await resp.text()
+            if resp.status >= 400:
+                raise PollError(f"HTTP {resp.status}: {body[:300]}")
+
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise PollError(f"Ungueltige API-Antwort: {body[:200]}") from exc
 
         if data.get("errors"):
-            logger.error("LZT API returned errors: %s", data["errors"])
-            return
+            raise PollError(f"LZT API Fehler: {data['errors']}")
 
         items = _extract_items(data)
+        total = data.get("totalItems")
         if not items:
-            logger.warning("Poll OK but 0 listings parsed (totalItems=%s)", data.get("totalItems"))
+            if total:
+                raise PollError(f"0 Listings geparst (totalItems={total})")
+            logger.warning("Poll OK but market returned 0 items for this filter")
             return
 
         logger.info("Poll OK: %d listings on page 1 (tracking %d known)", len(items), self.storage.count())
@@ -118,7 +145,6 @@ class LZTScanner:
                 continue
             new_items.append(item)
 
-        # Process oldest-first so alerts arrive in chronological order.
         for item in reversed(new_items):
             item_id = int(item["item_id"])
             self.storage.mark_seen(item_id, now)

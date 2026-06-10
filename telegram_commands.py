@@ -17,9 +17,15 @@ class TelegramCommandHandler:
         self._base_url = f"https://api.telegram.org/bot{bot_token}"
         self._offset = 0
         self._last_poll_ok = False
+        self._last_error = "Noch kein Poll ausgefuehrt"
 
-    def set_last_poll_ok(self, ok: bool) -> None:
+    def set_poll_result(self, ok: bool, error: str | None = None) -> None:
         self._last_poll_ok = ok
+        if error:
+            self._last_error = error
+
+    def get_last_error(self) -> str:
+        return self._last_error
 
     async def run(self) -> None:
         timeout = aiohttp.ClientTimeout(total=35)
@@ -61,5 +67,10 @@ class TelegramCommandHandler:
         if text not in ("/start", "/status"):
             return
 
-        await self.notifier.send_status_message(session, self.storage.count(), self._last_poll_ok)
+        await self.notifier.send_status_message(
+            session,
+            self.storage.count(),
+            self._last_poll_ok,
+            self._last_error,
+        )
         logger.info("Replied to %s command", text)
