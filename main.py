@@ -26,10 +26,11 @@ async def main() -> None:
         config.telegram_chat_id,
         notifier,
         storage,
+        config.filter_summary,
     )
     scanner = LZTScanner(config, storage, notifier, command_handler)
 
-    logger.info("Starting LZT scanner (poll interval: %.1fs)", config.poll_interval)
+    logger.info("Starting LZT scanner (poll interval: %.1fs, %s)", config.poll_interval, config.filter_summary)
     logger.info("Database: %s (%d known items)", config.db_path, storage.count())
 
     loop = asyncio.get_running_loop()

@@ -12,14 +12,6 @@ from storage import ItemStorage
 
 logger = logging.getLogger(__name__)
 
-SEARCH_PARAMS = [
-    ("knife", "true"),
-    ("valorant_region[]", "EU"),
-    ("order_by", "pdate_to_down"),
-    ("page", "1"),
-]
-
-
 class PollError(Exception):
     def __init__(self, message: str) -> None:
         self.message = message
@@ -40,6 +32,7 @@ class LZTScanner:
         self.command_handler = command_handler
         self._backoff = config.poll_interval
         self._first_run = storage.count() == 0
+        self._search_params = _build_search_params(config)
 
     async def run(self) -> None:
         timeout = aiohttp.ClientTimeout(total=30)
@@ -50,7 +43,11 @@ class LZTScanner:
         }
 
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            await self.notifier.send_startup_message(session, self.storage.count())
+            await self.notifier.send_startup_message(
+                session,
+                self.storage.count(),
+                self.config.filter_summary,
+            )
 
             while True:
                 started = time.monotonic()
@@ -99,7 +96,7 @@ class LZTScanner:
 
     async def _poll_once(self, session: aiohttp.ClientSession) -> None:
         url = f"{self.config.api_base_url}/riot"
-        async with session.get(url, params=SEARCH_PARAMS) as resp:
+        async with session.get(url, params=self._search_params) as resp:
             body = await resp.text()
             if resp.status >= 400:
                 raise PollError(f"HTTP {resp.status}: {body[:300]}")
@@ -177,3 +174,14 @@ def _normalize_listing(entry: Any) -> dict[str, Any] | None:
         return nested
 
     return None
+
+
+def _build_search_params(config: Config) -> list[tuple[str, str]]:
+    return [
+        ("knife", "true"),
+        ("valorant_region[]", "EU"),
+        ("order_by", "pdate_to_down"),
+        ("page", "1"),
+        ("pmax", str(config.max_price)),
+        ("currency", config.currency),
+    ]

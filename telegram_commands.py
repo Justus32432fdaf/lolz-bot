@@ -10,10 +10,18 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramCommandHandler:
-    def __init__(self, bot_token: str, chat_id: str, notifier: TelegramNotifier, storage: ItemStorage) -> None:
+    def __init__(
+        self,
+        bot_token: str,
+        chat_id: str,
+        notifier: TelegramNotifier,
+        storage: ItemStorage,
+        filter_summary: str,
+    ) -> None:
         self.chat_id = str(chat_id)
         self.notifier = notifier
         self.storage = storage
+        self.filter_summary = filter_summary
         self._base_url = f"https://api.telegram.org/bot{bot_token}"
         self._offset = 0
         self._last_poll_ok = False
@@ -72,5 +80,6 @@ class TelegramCommandHandler:
             self.storage.count(),
             self._last_poll_ok,
             self._last_error,
+            self.filter_summary,
         )
         logger.info("Replied to %s command", text)

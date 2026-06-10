@@ -10,6 +10,8 @@ class Config:
     poll_interval: float
     db_path: str
     api_base_url: str
+    max_price: float
+    currency: str
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -35,4 +37,10 @@ class Config:
             poll_interval=float(os.environ.get("POLL_INTERVAL", "6")),
             db_path=os.environ.get("DB_PATH", "data/scanner.db"),
             api_base_url=os.environ.get("LZT_API_BASE_URL", "https://prod-api.lzt.market"),
+            max_price=float(os.environ.get("PMAX", "20")),
+            currency=os.environ.get("CURRENCY", "eur").lower(),
         )
+
+    @property
+    def filter_summary(self) -> str:
+        return f"EU, Messer, max {self.max_price:g} {self.currency.upper()}"

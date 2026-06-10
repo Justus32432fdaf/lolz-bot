@@ -44,11 +44,16 @@ class TelegramNotifier:
 
         logger.info("Alert sent for item %s", item_id)
 
-    async def send_startup_message(self, session: aiohttp.ClientSession, seen_count: int) -> None:
+    async def send_startup_message(
+        self,
+        session: aiohttp.ClientSession,
+        seen_count: int,
+        filter_summary: str,
+    ) -> None:
         await self._send_message(
             session,
             "<b>LZT Scanner gestartet</b>\n\n"
-            "Filter: EU Region, hat Messer\n"
+            f"Filter: {_escape_html(filter_summary)}\n"
             f"Bekannte Listings: {seen_count}\n\n"
             "Sende /status fuer eine Statusabfrage.",
         )
@@ -59,6 +64,7 @@ class TelegramNotifier:
         seen_count: int,
         last_poll_ok: bool,
         last_error: str = "",
+        filter_summary: str = "EU, Messer",
     ) -> None:
         status = "OK" if last_poll_ok else "Fehler"
         detail = _escape_html(last_error) if last_error and not last_poll_ok else ""
@@ -69,7 +75,7 @@ class TelegramNotifier:
             f"API: <b>{status}</b>"
             f"{detail_block}\n"
             f"Bekannte Listings: <b>{seen_count}</b>\n"
-            "Filter: EU, Messer\n\n"
+            f"Filter: {_escape_html(filter_summary)}\n\n"
             "Sende /status fuer eine neue Abfrage.",
         )
 
