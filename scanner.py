@@ -7,6 +7,7 @@ from typing import Any
 import aiohttp
 
 from config import Config
+from item_fields import merge_item_data
 from notifier import TelegramNotifier
 from storage import ItemStorage
 
@@ -145,8 +146,28 @@ class LZTScanner:
         for item in reversed(new_items):
             item_id = int(item["item_id"])
             self.storage.mark_seen(item_id, now)
-            await self.notifier.send_listing_alert(session, item)
+            details = await self._fetch_item_details(session, item_id)
+            alert_item = merge_item_data(item, details)
+            await self.notifier.send_listing_alert(session, alert_item)
             logger.info("New listing detected: %s - %s", item_id, item.get("title", ""))
+
+    async def _fetch_item_details(self, session: aiohttp.ClientSession, item_id: int) -> dict[str, Any]:
+        url = f"{self.config.api_base_url}/{item_id}"
+        try:
+            async with session.get(url) as resp:
+                body = await resp.text()
+                if resp.status >= 400:
+                    logger.warning("Item detail fetch failed for %s: HTTP %s", item_id, resp.status)
+                    return {}
+                data = json.loads(body)
+        except Exception:
+            logger.exception("Item detail fetch failed for %s", item_id)
+            return {}
+
+        item = data.get("item")
+        if isinstance(item, dict):
+            return item
+        return {}
 
 
 def _extract_items(data: dict[str, Any]) -> list[dict[str, Any]]:

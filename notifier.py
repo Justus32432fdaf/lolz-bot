@@ -2,6 +2,14 @@ import logging
 
 import aiohttp
 
+from item_fields import (
+    extract_competitive_rank,
+    extract_inactivity_warning,
+    extract_inventory_value,
+    extract_knife_count,
+    extract_region,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -16,8 +24,11 @@ class TelegramNotifier:
         title = item.get("title", "Unbekannt")
         price = item.get("price", "?")
         currency = item.get("price_currency", "rub").upper()
-        region = _extract_region(item)
-        knife_count = _extract_knife_count(item)
+        region = extract_region(item)
+        knife_count = extract_knife_count(item)
+        rank = extract_competitive_rank(item)
+        inventory_value = extract_inventory_value(item)
+        inactivity_warning = extract_inactivity_warning(item)
         url = f"https://lzt.market/{item_id}"
 
         text = (
@@ -25,7 +36,10 @@ class TelegramNotifier:
             f"<b>{_escape_html(title)}</b>\n\n"
             f"Preis: <b>{price} {currency}</b>\n"
             f"Region: <b>{_escape_html(region)}</b>\n"
-            f"Messer: <b>{knife_count}</b>\n\n"
+            f"Messer: <b>{knife_count}</b>\n"
+            f"Competitive Rank: <b>{_escape_html(rank)}</b>\n"
+            f"Inventory Value: <b>{_escape_html(inventory_value)}</b>\n\n"
+            f"<i>{_escape_html(inactivity_warning)}</i>\n\n"
             f'<a href="{url}">Zum Listing</a>'
         )
 
@@ -90,31 +104,6 @@ class TelegramNotifier:
                 body = await resp.text()
                 logger.error("Telegram send failed (%s): %s", resp.status, body)
                 resp.raise_for_status()
-
-
-def _extract_region(item: dict) -> str:
-    riot = item.get("riot_valorant_region") or item.get("valorant_region")
-    if riot:
-        return str(riot)
-    item_get = item.get("item_get") or {}
-    if isinstance(item_get, dict):
-        region = item_get.get("valorant_region") or item_get.get("riot_valorant_region")
-        if region:
-            return str(region)
-    return "EU"
-
-
-def _extract_knife_count(item: dict) -> str:
-    for key in ("valorant_knife", "knife_count", "knifes"):
-        value = item.get(key)
-        if value is not None:
-            return str(value)
-    item_get = item.get("item_get") or {}
-    if isinstance(item_get, dict):
-        value = item_get.get("valorant_knife") or item_get.get("knife_count")
-        if value is not None:
-            return str(value)
-    return "1+"
 
 
 def _escape_html(text: str) -> str:
