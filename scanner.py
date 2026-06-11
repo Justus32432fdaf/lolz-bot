@@ -164,10 +164,14 @@ class LZTScanner:
             logger.exception("Item detail fetch failed for %s", item_id)
             return {}
 
+        details: dict[str, Any] = {}
         item = data.get("item")
         if isinstance(item, dict):
-            return item
-        return {}
+            details.update(item)
+        item_get = data.get("item_get")
+        if isinstance(item_get, dict):
+            details["item_get"] = item_get
+        return details
 
 
 def _extract_items(data: dict[str, Any]) -> list[dict[str, Any]]:
