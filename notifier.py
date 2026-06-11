@@ -3,11 +3,12 @@ import logging
 import aiohttp
 
 from item_fields import (
+    INACTIVITY_WARNING_THRESHOLD_DAYS,
     extract_competitive_rank,
-    extract_inactivity_warning,
+    extract_inactivity_days,
+    extract_inactivity_short,
     extract_inventory_value,
     extract_knife_count,
-    extract_long_inactivity_alert,
     extract_region,
 )
 
@@ -22,39 +23,33 @@ class TelegramNotifier:
 
     async def send_listing_alert(self, session: aiohttp.ClientSession, item: dict) -> None:
         item_id = item.get("item_id")
-        title = item.get("title", "Unbekannt")
         price = item.get("price", "?")
-        currency = item.get("price_currency", "rub").upper()
+        currency = item.get("price_currency", "eur").upper()
         region = extract_region(item)
         knife_count = extract_knife_count(item)
         rank = extract_competitive_rank(item)
         inventory_value = extract_inventory_value(item)
-        inactivity_warning = extract_inactivity_warning(item)
-        long_inactivity_alert = extract_long_inactivity_alert(item)
+        inactivity = extract_inactivity_short(item)
+        inactive_days = extract_inactivity_days(item)
         url = f"https://lzt.market/{item_id}"
 
-        long_inactive_block = ""
-        if long_inactivity_alert:
-            long_inactive_block = f"\n\n🔴 <b>{_escape_html(long_inactivity_alert)}</b>"
+        warning = ""
+        if inactive_days is not None and inactive_days > INACTIVITY_WARNING_THRESHOLD_DAYS:
+            warning = f"🔴 <b>{inactive_days}d inaktiv — Rueckhol-Risiko!</b>\n\n"
 
         text = (
-            f"<b>Neuer Valorant Account</b>"
-            f"{long_inactive_block}\n\n"
-            f"<b>{_escape_html(title)}</b>\n\n"
-            f"Preis: <b>{price} {currency}</b>\n"
-            f"Region: <b>{_escape_html(region)}</b>\n"
-            f"Messer: <b>{knife_count}</b>\n"
-            f"Competitive Rank: <b>{_escape_html(rank)}</b>\n"
-            f"Inventory Value (VP): <b>{_escape_html(inventory_value)}</b>\n\n"
-            f"<i>{_escape_html(inactivity_warning)}</i>\n\n"
-            f'<a href="{url}">Zum Listing</a>'
+            f"{warning}"
+            f"<b>{price} {currency}</b> · {_escape_html(rank)} · "
+            f"{_escape_html(inventory_value)} · {knife_count}🔪 · {_escape_html(region)}\n"
+            f"Inaktiv: {inactivity}\n\n"
+            f'<a href="{url}">→ Listing</a>'
         )
 
         payload = {
             "chat_id": self.chat_id,
             "text": text,
             "parse_mode": "HTML",
-            "disable_web_page_preview": False,
+            "disable_web_page_preview": True,
         }
 
         async with session.post(f"{self._base_url}/sendMessage", json=payload) as resp:
@@ -73,10 +68,7 @@ class TelegramNotifier:
     ) -> None:
         await self._send_message(
             session,
-            "<b>LZT Scanner gestartet</b>\n\n"
-            f"Filter: {_escape_html(filter_summary)}\n"
-            f"Bekannte Listings: {seen_count}\n\n"
-            "Sende /status fuer eine Statusabfrage.",
+            f"<b>Scanner läuft</b>\n{_escape_html(filter_summary)} · {seen_count} bekannt",
         )
 
     async def send_status_message(
@@ -88,16 +80,11 @@ class TelegramNotifier:
         filter_summary: str = "EU, Messer",
     ) -> None:
         status = "OK" if last_poll_ok else "Fehler"
-        detail = _escape_html(last_error) if last_error and not last_poll_ok else ""
-        detail_block = f"\nDetails: <code>{detail}</code>\n" if detail else "\n"
+        detail = f" ({_escape_html(last_error)})" if last_error and not last_poll_ok else ""
         await self._send_message(
             session,
-            "<b>LZT Scanner Status</b>\n\n"
-            f"API: <b>{status}</b>"
-            f"{detail_block}\n"
-            f"Bekannte Listings: <b>{seen_count}</b>\n"
-            f"Filter: {_escape_html(filter_summary)}\n\n"
-            "Sende /status fuer eine neue Abfrage.",
+            f"<b>Status: {status}</b>{detail}\n"
+            f"{_escape_html(filter_summary)} · {seen_count} bekannt",
         )
 
     async def _send_message(self, session: aiohttp.ClientSession, text: str) -> None:

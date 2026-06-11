@@ -163,14 +163,15 @@ def is_inactive_over_threshold(
     return days is not None and days > threshold_days
 
 
-def extract_long_inactivity_alert(item: dict[str, Any]) -> str | None:
+def extract_inactivity_short(item: dict[str, Any]) -> str:
     days = extract_inactivity_days(item)
-    if days is None or days <= INACTIVITY_WARNING_THRESHOLD_DAYS:
-        return None
-    return (
-        f"WARNUNG: Account seit {days} Tagen inaktiv "
-        f"(>{INACTIVITY_WARNING_THRESHOLD_DAYS} Tage)! Hohes Rueckhol-Risiko."
-    )
+    if days is None:
+        return "?"
+    if days <= 0:
+        return "heute"
+    if days == 1:
+        return "1 Tag"
+    return f"{days} Tage"
 
 
 def extract_inactivity(item: dict[str, Any]) -> str:
