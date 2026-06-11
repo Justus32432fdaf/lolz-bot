@@ -7,11 +7,12 @@ from typing import Any
 import aiohttp
 
 from config import Config
-from item_fields import merge_item_data
+from item_fields import matches_scan_filters, merge_item_data
 from notifier import TelegramNotifier
 from storage import ItemStorage
 
 logger = logging.getLogger(__name__)
+
 
 class PollError(Exception):
     def __init__(self, message: str) -> None:
@@ -33,7 +34,9 @@ class LZTScanner:
         self.command_handler = command_handler
         self._backoff = config.poll_interval
         self._first_run = storage.count() == 0
-        self._search_params = _build_search_params(config)
+        self._filtered_params = _build_filtered_search_params(config)
+        self._global_params = [("order_by", "pdate_to_down"), ("page", "1")]
+        self._process_lock = asyncio.Lock()
 
     async def run(self) -> None:
         timeout = aiohttp.ClientTimeout(total=30)
@@ -50,54 +53,51 @@ class LZTScanner:
                 self.config.filter_summary,
             )
 
-            while True:
-                started = time.monotonic()
-                try:
-                    await self._poll_once(session)
-                    if self.command_handler:
-                        self.command_handler.set_poll_result(True, "OK")
-                    self._backoff = self.config.poll_interval
-                except PollError as exc:
-                    if self.command_handler:
-                        self.command_handler.set_poll_result(False, exc.message)
-                    logger.error("Poll failed: %s", exc.message)
-                    self._backoff = min(self._backoff * 2, 60)
-                except aiohttp.ClientResponseError as exc:
-                    body = getattr(exc, "message", str(exc))
-                    error = f"HTTP {exc.status}: {body}"
-                    if self.command_handler:
-                        is_rate_limit = exc.status == 429
-                        self.command_handler.set_poll_result(
-                            is_rate_limit,
-                            "Rate limit (429) - warte..." if is_rate_limit else error,
-                        )
-                    if exc.status == 429:
-                        retry_after = float(exc.headers.get("Retry-After", self._backoff * 2))
-                        self._backoff = min(max(retry_after, self.config.poll_interval), 60)
-                        logger.warning("Rate limited (429), backing off to %.1fs", self._backoff)
-                    else:
-                        logger.error("API error: %s", error)
-                        self._backoff = min(self._backoff * 2, 60)
-                except aiohttp.ClientError as exc:
-                    error = f"Netzwerkfehler: {exc}"
-                    if self.command_handler:
-                        self.command_handler.set_poll_result(False, error)
-                    logger.error(error)
-                    self._backoff = min(self._backoff * 2, 60)
-                except Exception as exc:
-                    error = f"Unerwarteter Fehler: {exc}"
-                    if self.command_handler:
-                        self.command_handler.set_poll_result(False, error)
-                    logger.exception("Unexpected error during poll")
-                    self._backoff = min(self._backoff * 2, 60)
+            await asyncio.gather(
+                self._poll_loop(session, "filtered", "/riot", self._filtered_params, self.config.poll_interval),
+                self._poll_loop(session, "global", "/", self._global_params, 3.0, filter_client_side=True),
+            )
 
-                elapsed = time.monotonic() - started
-                sleep_for = max(self._backoff - elapsed, 0.5)
-                await asyncio.sleep(sleep_for)
+    async def _poll_loop(
+        self,
+        session: aiohttp.ClientSession,
+        name: str,
+        path: str,
+        params: list[tuple[str, str]],
+        interval: float,
+        filter_client_side: bool = False,
+    ) -> None:
+        backoff = interval
+        while True:
+            started = time.monotonic()
+            try:
+                await self._poll_once(session, path, params, filter_client_side)
+                if self.command_handler and name == "filtered":
+                    self.command_handler.set_poll_result(True, "OK")
+                backoff = interval
+            except PollError as exc:
+                if self.command_handler and name == "filtered":
+                    self.command_handler.set_poll_result(False, exc.message)
+                logger.error("[%s] Poll failed: %s", name, exc.message)
+                backoff = min(backoff * 2, 60)
+            except Exception:
+                if self.command_handler and name == "filtered":
+                    self.command_handler.set_poll_result(False, f"{name} poll error")
+                logger.exception("[%s] Unexpected poll error", name)
+                backoff = min(backoff * 2, 60)
 
-    async def _poll_once(self, session: aiohttp.ClientSession) -> None:
-        url = f"{self.config.api_base_url}/riot"
-        async with session.get(url, params=self._search_params) as resp:
+            elapsed = time.monotonic() - started
+            await asyncio.sleep(max(backoff - elapsed, 0.5))
+
+    async def _poll_once(
+        self,
+        session: aiohttp.ClientSession,
+        path: str,
+        params: list[tuple[str, str]],
+        filter_client_side: bool,
+    ) -> None:
+        url = f"{self.config.api_base_url}{path}"
+        async with session.get(url, params=params) as resp:
             body = await resp.text()
             if resp.status >= 400:
                 raise PollError(f"HTTP {resp.status}: {body[:300]}")
@@ -111,45 +111,70 @@ class LZTScanner:
             raise PollError(f"LZT API Fehler: {data['errors']}")
 
         items = _extract_items(data)
-        total = data.get("totalItems")
-        if not items:
-            if total:
-                raise PollError(f"0 Listings geparst (totalItems={total})")
-            logger.warning("Poll OK but market returned 0 items for this filter")
-            return
-
-        logger.info("Poll OK: %d listings on page 1 (tracking %d known)", len(items), self.storage.count())
-
-        now = time.time()
-
-        if self._first_run:
-            to_seed = [
-                (int(item["item_id"]), now)
+        if filter_client_side:
+            items = [
+                item
                 for item in items
-                if item.get("item_id") and not self.storage.is_seen(int(item["item_id"]))
+                if matches_scan_filters(
+                    item,
+                    self.config.max_price,
+                    self.config.currency,
+                    require_category=True,
+                )
             ]
-            if to_seed:
-                logger.info("First run: seeding %d listings without alerts", len(to_seed))
-                self.storage.mark_many_seen(to_seed)
-            self._first_run = False
+
+        if not items:
             return
 
+        await self._process_items(session, items)
+
+    async def _process_items(self, session: aiohttp.ClientSession, items: list[dict[str, Any]]) -> None:
+        async with self._process_lock:
+            await self._process_items_locked(session, items)
+
+    async def _process_items_locked(self, session: aiohttp.ClientSession, items: list[dict[str, Any]]) -> None:
+        now = time.time()
         new_items: list[dict[str, Any]] = []
+        to_seed: list[tuple[int, float]] = []
+
         for item in items:
             item_id = item.get("item_id")
             if not item_id:
                 continue
-            if self.storage.is_seen(int(item_id)):
+            item_id_int = int(item_id)
+            if self.storage.is_seen(item_id_int):
                 continue
+
+            published = _published_timestamp(item)
+            age_seconds = (now - published) if published is not None else None
+
+            if self._first_run and age_seconds is not None and age_seconds > self.config.startup_grace_seconds:
+                to_seed.append((item_id_int, now))
+                continue
+
             new_items.append(item)
+
+        if self._first_run:
+            if to_seed:
+                logger.info("First run: seeding %d old listings without alerts", len(to_seed))
+                self.storage.mark_many_seen(to_seed)
+            self._first_run = False
+
+        if not new_items:
+            return
 
         for item in reversed(new_items):
             item_id = int(item["item_id"])
-            self.storage.mark_seen(item_id, now)
+            published = _published_timestamp(item)
+            age_min = int((now - published) / 60) if published is not None else None
+            if age_min is not None and age_min >= 5:
+                logger.warning("Late alert: item %s is %d minutes old", item_id, age_min)
+
             details = await self._fetch_item_details(session, item_id)
             alert_item = merge_item_data(item, details)
-            await self.notifier.send_listing_alert(session, alert_item)
-            logger.info("New listing detected: %s - %s", item_id, item.get("title", ""))
+            await self.notifier.send_listing_alert(session, alert_item, age_min)
+            self.storage.mark_seen(item_id, now)
+            logger.info("New listing detected: %s (%s min old)", item_id, age_min if age_min is not None else "?")
 
     async def _fetch_item_details(self, session: aiohttp.ClientSession, item_id: int) -> dict[str, Any]:
         url = f"{self.config.api_base_url}/{item_id}"
@@ -172,6 +197,18 @@ class LZTScanner:
         if isinstance(item_get, dict):
             details["item_get"] = item_get
         return details
+
+
+def _published_timestamp(item: dict[str, Any]) -> float | None:
+    for key in ("published_date", "publishedDate", "pdate"):
+        value = item.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _extract_items(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -201,7 +238,7 @@ def _normalize_listing(entry: Any) -> dict[str, Any] | None:
     return None
 
 
-def _build_search_params(config: Config) -> list[tuple[str, str]]:
+def _build_filtered_search_params(config: Config) -> list[tuple[str, str]]:
     return [
         ("knife", "true"),
         ("valorant_region[]", "EU"),

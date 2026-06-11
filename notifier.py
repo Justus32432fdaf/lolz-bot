@@ -21,7 +21,12 @@ class TelegramNotifier:
         self.chat_id = chat_id
         self._base_url = f"https://api.telegram.org/bot{bot_token}"
 
-    async def send_listing_alert(self, session: aiohttp.ClientSession, item: dict) -> None:
+    async def send_listing_alert(
+        self,
+        session: aiohttp.ClientSession,
+        item: dict,
+        listing_age_min: int | None = None,
+    ) -> None:
         item_id = item.get("item_id")
         price = item.get("price", "?")
         currency = item.get("price_currency", "eur").upper()
@@ -37,8 +42,18 @@ class TelegramNotifier:
         if inactive_days is not None and inactive_days > INACTIVITY_WARNING_THRESHOLD_DAYS:
             warning = f"🔴 <b>{inactive_days}d inaktiv — Rueckhol-Risiko!</b>\n\n"
 
+        if listing_age_min is None:
+            age_line = ""
+        elif listing_age_min <= 0:
+            age_line = "🕐 Gerade gepostet\n"
+        elif listing_age_min >= 5:
+            age_line = f"🕐 <b>{listing_age_min} Min alt</b> — spaete Meldung\n"
+        else:
+            age_line = f"🕐 {listing_age_min} Min alt\n"
+
         text = (
             f"{warning}"
+            f"{age_line}"
             f"<b>{price} {currency}</b> · {_escape_html(rank)} · "
             f"{_escape_html(inventory_value)} · {_escape_html(region)}\n"
             f"🔪 {_escape_html(knife_names)}\n"

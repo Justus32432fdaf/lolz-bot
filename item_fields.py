@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
+
+RIOT_CATEGORY_ID = 13
 
 _SKIN_CONTAINER_KEYS = ("item_get", "riot", "valorant", "account_data", "data")
 _SKIP_DEEP_KEYS = frozenset(
@@ -56,6 +59,59 @@ VALORANT_RANKS: dict[int, str] = {
 }
 
 INACTIVITY_WARNING_THRESHOLD_DAYS = 30
+
+
+def extract_published_age_minutes(item: dict[str, Any]) -> int | None:
+    published = _find_value(item, "published_date", "publishedDate", "pdate")
+    if published is None:
+        return None
+    try:
+        return max(int((time.time() - float(published)) / 60), 0)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def matches_scan_filters(
+    item: dict[str, Any],
+    max_price: float,
+    currency: str,
+    require_category: bool = False,
+) -> bool:
+    category_id = item.get("category_id") or item.get("categoryId")
+    if category_id is not None:
+        try:
+            if int(category_id) != RIOT_CATEGORY_ID:
+                return False
+        except (TypeError, ValueError):
+            if require_category:
+                return False
+    elif require_category:
+        return False
+
+    price = item.get("price")
+    if price is not None:
+        try:
+            if float(price) > max_price:
+                return False
+        except (TypeError, ValueError):
+            pass
+
+    item_currency = str(item.get("price_currency", "")).lower()
+    if item_currency and item_currency != currency.lower():
+        return False
+
+    region = extract_region(item).upper()
+    if region not in ("EU", "EUROPE"):
+        return False
+
+    knife_count = _find_value(item, "valorant_knife", "knife_count", "knifes")
+    if knife_count is not None:
+        try:
+            return int(knife_count) > 0
+        except (TypeError, ValueError):
+            return False
+
+    return True
 
 
 def merge_item_data(*sources: dict[str, Any]) -> dict[str, Any]:
