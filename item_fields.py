@@ -1,7 +1,26 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
+
+_KNIFE_NAME_HINTS = (
+    "knife",
+    "blade",
+    "karambit",
+    "katana",
+    "sword",
+    "axe",
+    "mace",
+    "kunai",
+    "dagger",
+    "yaiba",
+    "kunitsuna",
+    "firefly",
+    "powder",
+    "molten",
+    "sovereign",
+)
 
 VALORANT_RANKS: dict[int, str] = {
     3: "Iron 1",
@@ -53,6 +72,9 @@ def extract_region(item: dict[str, Any]) -> str:
 
 
 def extract_knife_count(item: dict[str, Any]) -> str:
+    names = _collect_knife_names(item)
+    if names:
+        return str(len(names))
     value = _find_value(
         item,
         "valorant_knife",
@@ -61,6 +83,13 @@ def extract_knife_count(item: dict[str, Any]) -> str:
         "knife",
     )
     return str(value) if value is not None else "1+"
+
+
+def extract_knife_names(item: dict[str, Any]) -> str:
+    names = _collect_knife_names(item)
+    if not names:
+        return "?"
+    return " · ".join(names)
 
 
 def extract_competitive_rank(item: dict[str, Any]) -> str:
@@ -217,6 +246,122 @@ def _format_last_activity(timestamp: float) -> str:
     if day_diff < 7:
         return f"vor {day_diff} Tagen ({dt.strftime('%d.%m.%Y %H:%M UTC')})"
     return dt.strftime("%d.%m.%Y %H:%M UTC")
+
+
+def _collect_knife_names(item: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+
+    for raw in _find_lists(
+        item,
+        "valorant_knives",
+        "knives",
+        "knife_skins",
+        "riot_valorant_knives",
+        "valorant_knife_skins",
+        "weaponSkin",
+        "weapon_skins",
+        "valorant_weapon_skins",
+        "riot_valorant_weapon_skins",
+        "skins",
+    ):
+        names.extend(_normalize_skin_names(raw))
+
+    _deep_collect_knife_names(item, names)
+    names.extend(_parse_knives_from_title(str(item.get("title", ""))))
+
+    return _unique_preserve_order(name for name in names if name)
+
+
+def _normalize_skin_names(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, dict):
+        name = value.get("name") or value.get("title") or value.get("displayName")
+        return [str(name).strip()] if name else []
+    if isinstance(value, list):
+        result: list[str] = []
+        for entry in value:
+            result.extend(_normalize_skin_names(entry))
+        return result
+    return []
+
+
+def _deep_collect_knife_names(value: Any, names: list[str]) -> None:
+    if isinstance(value, dict):
+        name = value.get("name") or value.get("title") or value.get("displayName")
+        skin_type = " ".join(
+            str(value.get(key, "")) for key in ("type", "category", "weaponType", "slot")
+        ).lower()
+        if name:
+            text = str(name).strip()
+            if "knife" in skin_type or "melee" in skin_type or _looks_like_knife_name(text):
+                names.append(text)
+        for nested in value.values():
+            _deep_collect_knife_names(nested, names)
+    elif isinstance(value, list):
+        for nested in value:
+            _deep_collect_knife_names(nested, names)
+    elif isinstance(value, str) and _looks_like_knife_name(value):
+        names.append(value.strip())
+
+
+def _parse_knives_from_title(title: str) -> list[str]:
+    if not title:
+        return []
+
+    names: list[str] = []
+    for match in re.finditer(r'Blade\s*"([^"]+)"', title, re.IGNORECASE):
+        blade = match.group(1).strip()
+        if blade:
+            names.append(blade)
+
+    for part in re.split(r"[/|]", title):
+        part = part.strip()
+        if re.search(r"\bknife\b", part, re.IGNORECASE):
+            cleaned = re.sub(r"^\d+\s*", "", part).strip()
+            if cleaned:
+                names.append(cleaned)
+
+    return names
+
+
+def _looks_like_knife_name(name: str) -> bool:
+    lower = name.lower().strip()
+    if len(lower) < 3:
+        return False
+    if re.search(r"\bknife\b", lower):
+        return True
+    if re.search(r"\bblade\b", lower):
+        return True
+    return any(hint in lower for hint in _KNIFE_NAME_HINTS if hint not in ("knife", "blade"))
+
+
+def _unique_preserve_order(names: Any) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for name in names:
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(name)
+    return unique
+
+
+def _find_lists(item: dict[str, Any], *keys: str) -> list[Any]:
+    containers: list[dict[str, Any]] = [item]
+    for nested_key in ("item_get", "riot", "valorant", "account_data", "data"):
+        nested = item.get(nested_key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+
+    results: list[Any] = []
+    for container in containers:
+        for key in keys:
+            value = container.get(key)
+            if isinstance(value, list) and value:
+                results.append(value)
+    return results
 
 
 def _find_value(item: dict[str, Any], *keys: str) -> Any:

@@ -8,7 +8,7 @@ from item_fields import (
     extract_inactivity_days,
     extract_inactivity_short,
     extract_inventory_value,
-    extract_knife_count,
+    extract_knife_names,
     extract_region,
 )
 
@@ -26,7 +26,7 @@ class TelegramNotifier:
         price = item.get("price", "?")
         currency = item.get("price_currency", "eur").upper()
         region = extract_region(item)
-        knife_count = extract_knife_count(item)
+        knife_names = extract_knife_names(item)
         rank = extract_competitive_rank(item)
         inventory_value = extract_inventory_value(item)
         inactivity = extract_inactivity_short(item)
@@ -40,7 +40,8 @@ class TelegramNotifier:
         text = (
             f"{warning}"
             f"<b>{price} {currency}</b> · {_escape_html(rank)} · "
-            f"{_escape_html(inventory_value)} · {knife_count}🔪 · {_escape_html(region)}\n"
+            f"{_escape_html(inventory_value)} · {_escape_html(region)}\n"
+            f"🔪 {_escape_html(knife_names)}\n"
             f"Inaktiv: {inactivity}\n\n"
             f'<a href="{url}">→ Listing</a>'
         )
