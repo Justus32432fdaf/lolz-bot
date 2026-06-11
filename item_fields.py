@@ -101,19 +101,29 @@ def extract_inventory_value(item: dict[str, Any]) -> str:
         "inventory_value",
         "inv_value",
         "inventoryValue",
+        "valorant_inventory",
     )
     if value is None:
         return "Unbekannt"
 
-    currency = _find_value(
-        item,
-        "riot_valorant_inventory_currency",
-        "inventory_currency",
-        "price_currency",
-    )
-    if currency:
-        return f"{value} {str(currency).upper()}"
-    return str(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lower().endswith("vp"):
+            return text
+        digits = "".join(ch for ch in text if ch.isdigit())
+        if digits:
+            return _format_vp(int(digits))
+        return f"{text} VP"
+
+    try:
+        return _format_vp(int(float(value)))
+    except (TypeError, ValueError):
+        return f"{value} VP"
+
+
+def _format_vp(amount: int) -> str:
+    formatted = f"{amount:,}".replace(",", ".")
+    return f"{formatted} VP"
 
 
 def extract_inactivity(item: dict[str, Any]) -> str:

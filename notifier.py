@@ -38,7 +38,7 @@ class TelegramNotifier:
             f"Region: <b>{_escape_html(region)}</b>\n"
             f"Messer: <b>{knife_count}</b>\n"
             f"Competitive Rank: <b>{_escape_html(rank)}</b>\n"
-            f"Inventory Value: <b>{_escape_html(inventory_value)}</b>\n\n"
+            f"Inventory Value (VP): <b>{_escape_html(inventory_value)}</b>\n\n"
             f"<i>{_escape_html(inactivity_warning)}</i>\n\n"
             f'<a href="{url}">Zum Listing</a>'
         )
