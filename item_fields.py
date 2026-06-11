@@ -31,6 +31,8 @@ VALORANT_RANKS: dict[int, str] = {
     27: "Radiant",
 }
 
+INACTIVITY_WARNING_THRESHOLD_DAYS = 30
+
 
 def merge_item_data(*sources: dict[str, Any]) -> dict[str, Any]:
     merged: dict[str, Any] = {}
@@ -126,16 +128,13 @@ def _format_vp(amount: int) -> str:
     return f"{formatted} VP"
 
 
-def extract_inactivity(item: dict[str, Any]) -> str:
-    phrase = _find_value(
-        item,
-        "riot_last_activity_text",
-        "last_activity_text",
-        "activity_text",
-        "last_activity_phrase",
-    )
-    if phrase:
-        return str(phrase)
+def extract_inactivity_days(item: dict[str, Any]) -> int | None:
+    daybreak = _find_value(item, "daybreak", "days_offline", "offline_days")
+    if daybreak is not None:
+        try:
+            return max(int(daybreak), 0)
+        except (TypeError, ValueError):
+            pass
 
     timestamp = _find_value(
         item,
@@ -147,16 +146,46 @@ def extract_inactivity(item: dict[str, Any]) -> str:
     )
     if timestamp is not None:
         try:
-            return _format_last_activity(float(timestamp))
-        except (TypeError, ValueError):
+            dt = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
+            now = datetime.now(timezone.utc)
+            return max((now.date() - dt.date()).days, 0)
+        except (TypeError, ValueError, OSError):
             pass
 
-    daybreak = _find_value(item, "daybreak", "days_offline", "offline_days")
-    if daybreak is not None:
-        try:
-            days = int(daybreak)
-        except (TypeError, ValueError):
-            return str(daybreak)
+    return None
+
+
+def is_inactive_over_threshold(
+    item: dict[str, Any],
+    threshold_days: int = INACTIVITY_WARNING_THRESHOLD_DAYS,
+) -> bool:
+    days = extract_inactivity_days(item)
+    return days is not None and days > threshold_days
+
+
+def extract_long_inactivity_alert(item: dict[str, Any]) -> str | None:
+    days = extract_inactivity_days(item)
+    if days is None or days <= INACTIVITY_WARNING_THRESHOLD_DAYS:
+        return None
+    return (
+        f"WARNUNG: Account seit {days} Tagen inaktiv "
+        f"(>{INACTIVITY_WARNING_THRESHOLD_DAYS} Tage)! Hohes Rueckhol-Risiko."
+    )
+
+
+def extract_inactivity(item: dict[str, Any]) -> str:
+    phrase = _find_value(
+        item,
+        "riot_last_activity_text",
+        "last_activity_text",
+        "activity_text",
+        "last_activity_phrase",
+    )
+    if phrase:
+        return str(phrase)
+
+    days = extract_inactivity_days(item)
+    if days is not None:
         if days <= 0:
             return "Heute aktiv"
         if days == 1:

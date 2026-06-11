@@ -7,6 +7,7 @@ from item_fields import (
     extract_inactivity_warning,
     extract_inventory_value,
     extract_knife_count,
+    extract_long_inactivity_alert,
     extract_region,
 )
 
@@ -29,10 +30,16 @@ class TelegramNotifier:
         rank = extract_competitive_rank(item)
         inventory_value = extract_inventory_value(item)
         inactivity_warning = extract_inactivity_warning(item)
+        long_inactivity_alert = extract_long_inactivity_alert(item)
         url = f"https://lzt.market/{item_id}"
 
+        long_inactive_block = ""
+        if long_inactivity_alert:
+            long_inactive_block = f"\n\n🔴 <b>{_escape_html(long_inactivity_alert)}</b>"
+
         text = (
-            f"<b>Neuer Valorant Account</b>\n\n"
+            f"<b>Neuer Valorant Account</b>"
+            f"{long_inactive_block}\n\n"
             f"<b>{_escape_html(title)}</b>\n\n"
             f"Preis: <b>{price} {currency}</b>\n"
             f"Region: <b>{_escape_html(region)}</b>\n"
