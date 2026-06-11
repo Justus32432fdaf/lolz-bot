@@ -13,6 +13,7 @@ class Config:
     max_price: float
     currency: str
     startup_grace_seconds: float
+    max_alert_age_seconds: float
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -41,6 +42,7 @@ class Config:
             max_price=float(os.environ.get("PMAX", "20")),
             currency=os.environ.get("CURRENCY", "eur").lower(),
             startup_grace_seconds=float(os.environ.get("STARTUP_GRACE_SECONDS", "600")),
+            max_alert_age_seconds=float(os.environ.get("MAX_ALERT_AGE_SECONDS", "900")),
         )
 
     @property

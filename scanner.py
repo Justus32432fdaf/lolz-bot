@@ -33,7 +33,7 @@ class LZTScanner:
         self.notifier = notifier
         self.command_handler = command_handler
         self._backoff = config.poll_interval
-        self._first_run = storage.count() == 0
+        self._warmup = True
         self._filtered_params = _build_filtered_search_params(config)
         self._global_params = [("order_by", "pdate_to_down"), ("page", "1")]
         self._process_lock = asyncio.Lock()
@@ -148,17 +148,27 @@ class LZTScanner:
             published = _published_timestamp(item)
             age_seconds = (now - published) if published is not None else None
 
-            if self._first_run and age_seconds is not None and age_seconds > self.config.startup_grace_seconds:
+            if age_seconds is not None and age_seconds > self.config.max_alert_age_seconds:
+                logger.info(
+                    "Skipping stale listing %s (%d min old, max %d min)",
+                    item_id_int,
+                    int(age_seconds / 60),
+                    int(self.config.max_alert_age_seconds / 60),
+                )
+                to_seed.append((item_id_int, now))
+                continue
+
+            if self._warmup and age_seconds is not None and age_seconds > self.config.startup_grace_seconds:
                 to_seed.append((item_id_int, now))
                 continue
 
             new_items.append(item)
 
-        if self._first_run:
-            if to_seed:
-                logger.info("First run: seeding %d old listings without alerts", len(to_seed))
-                self.storage.mark_many_seen(to_seed)
-            self._first_run = False
+        if to_seed:
+            self.storage.mark_many_seen(to_seed)
+        if self._warmup:
+            logger.info("Warmup: stored %d listings without alerts", len(to_seed))
+            self._warmup = False
 
         if not new_items:
             return
